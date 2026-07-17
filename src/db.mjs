@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 import { mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -12,11 +12,10 @@ const HEARTBEAT_HINT_MS = Number(process.env.HEARTBEAT_MS) || 30_000;
 
 export function openDb(dbPath = process.env.LICENSE_DB || DEFAULT_DB) {
     mkdirSync(dirname(dbPath), { recursive: true });
-    const db = new DatabaseSync(dbPath);
+    const db = new Database(dbPath);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
     db.exec(`
-        PRAGMA journal_mode = WAL;
-        PRAGMA foreign_keys = ON;
-
         CREATE TABLE IF NOT EXISTS license_keys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             key_code TEXT NOT NULL UNIQUE,
