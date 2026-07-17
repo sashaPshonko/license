@@ -1,0 +1,14 @@
+{
+  "name": "botpodpopcorn-license",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Лицензии и аналитика сделок botpodpopcorn",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "dev": "node --watch src/server.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

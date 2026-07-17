@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>botpodpopcorn — лицензии</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>botpodpopcorn</h1>
+        <p class="sub">ключи · сессии · прибыль</p>
+      </div>
+      <label class="token">
+        admin token
+        <input id="adminToken" type="password" placeholder="пусто = открыто" />
+      </label>
+    </header>
+
+    <section class="card">
+      <h2>Выдать ключ</h2>
+      <form id="issueForm" class="row">
+        <label>тип
+          <select id="plan">
+            <option value="normal">normal</option>
+            <option value="pro">pro</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+        <label>дней
+          <input id="days" type="number" min="1" value="30" />
+        </label>
+        <label>заметка
+          <input id="note" type="text" placeholder="покупатель / заказ" />
+        </label>
+        <button type="submit">создать</button>
+      </form>
+      <p id="issueResult" class="mono"></p>
+    </section>
+
+    <section class="card">
+      <div class="row between">
+        <h2>Ключи</h2>
+        <button type="button" id="refreshKeys" class="ghost">обновить</button>
+      </div>
+      <div class="table-wrap">
+        <table id="keysTable">
+          <thead>
+            <tr>
+              <th>ключ</th>
+              <th>план</th>
+              <th>до</th>
+              <th>сессии</th>
+              <th>запуски</th>
+              <th>net</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row between">
+        <h2>Прибыль</h2>
+        <div class="row filters">
+          <label class="inline">ключ
+            <select id="profitKey">
+              <option value="">все</option>
+            </select>
+          </label>
+          <label class="inline">дней
+            <input id="profitDays" type="number" min="1" value="14" />
+          </label>
+        </div>
+      </div>
+      <div class="table-wrap" style="margin-bottom:14px">
+        <table id="keyProfitTable">
+          <thead><tr><th>ключ</th><th>план</th><th>сделки</th><th>куп</th><th>прод</th><th>net</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="grid2">
+        <div>
+          <h3 class="h3">по дням</h3>
+          <div class="table-wrap">
+            <table id="dayTable">
+              <thead><tr><th>день</th><th>сделки</th><th>куп</th><th>прод</th><th>net</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <h3 class="h3">по предметам (label)</h3>
+          <div class="table-wrap">
+            <table id="labelTable">
+              <thead><tr><th>label</th><th>buy</th><th>sell</th><th>куп</th><th>прод</th><th>net</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Последние сделки</h2>
+      <div class="table-wrap">
+        <table id="tradesTable">
+          <thead>
+            <tr>
+              <th>время</th>
+              <th>ключ</th>
+              <th>side</th>
+              <th>label</th>
+              <th>тип</th>
+              <th>цена</th>
+              <th>целостн.</th>
+              <th>анарх.</th>
+              <th>чары</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Запуски</h2>
+      <div class="table-wrap">
+        <table id="launchesTable">
+          <thead>
+            <tr>
+              <th>время</th>
+              <th>ключ</th>
+              <th>ok</th>
+              <th>device</th>
+              <th>причина</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
