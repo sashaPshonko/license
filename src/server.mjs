@@ -1,6 +1,7 @@
 import { createServer } from 'http';
-import { readFileSync, existsSync, createReadStream } from 'fs';
+import { readFileSync, existsSync, createReadStream, unlinkSync } from 'fs';
 import { join, dirname, extname, basename } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import {
     openDb,
@@ -20,6 +21,9 @@ import {
     analysisToMarkdown,
     getDbPath,
     isAdminAuth,
+    startDbBackupLoop,
+    closeDb,
+    backupDb,
 } from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -318,23 +322,34 @@ async function handleApi(req, res, url) {
         }
 
         if (path === '/v1/admin/export/db' && req.method === 'GET') {
+            // Консистентный снимок через backup API — не стримить живой .db
+            const tmp = join(tmpdir(), `license-export-${Date.now()}.db`);
             try {
-                db.pragma('wal_checkpoint(TRUNCATE)');
-            } catch {
-                /* ignore */
-            }
-            const dbPath = getDbPath();
-            if (!existsSync(dbPath)) {
-                sendJson(res, 404, { ok: false, reason: 'db_missing' });
+                backupDb(db, tmp);
+            } catch (e) {
+                sendJson(res, 500, {
+                    ok: false,
+                    reason: e.message || 'backup_failed',
+                });
                 return;
             }
-            const name = basename(dbPath) || 'license.db';
+            const name = basename(getDbPath()) || 'license.db';
             res.writeHead(200, {
                 'Content-Type': 'application/octet-stream',
                 'Content-Disposition': `attachment; filename="${name}"`,
                 'Access-Control-Allow-Origin': '*',
             });
-            createReadStream(dbPath).pipe(res);
+            const stream = createReadStream(tmp);
+            const cleanup = () => {
+                try {
+                    unlinkSync(tmp);
+                } catch {
+                    /* ignore */
+                }
+            };
+            stream.on('close', cleanup);
+            stream.on('error', cleanup);
+            stream.pipe(res);
             return;
         }
     }
@@ -373,4 +388,14 @@ server.listen(PORT, HOST, () => {
     console.log(`[license] botpodpopcorn listening http://${HOST}:${PORT}`);
     console.log('[license] admin panel: login with an admin plan key');
     if (ADMIN_TOKEN) console.log('[license] ADMIN_TOKEN also accepted');
+    startDbBackupLoop(db);
 });
+
+function shutdown(sig) {
+    console.log(`[license] ${sig} — closing db`);
+    closeDb(db);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 3000).unref();
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

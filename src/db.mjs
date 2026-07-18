@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'fs';
+import { mkdirSync, readdirSync, unlinkSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
@@ -10,11 +10,32 @@ const DEFAULT_DB = join(__dirname, '..', 'data', 'license.db');
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 45_000;
 const HEARTBEAT_HINT_MS = Number(process.env.HEARTBEAT_MS) || 15_000;
 
+const BACKUP_INTERVAL_MS =
+    Number(process.env.LICENSE_BACKUP_INTERVAL_MS) || 6 * 60 * 60 * 1000;
+const BACKUP_KEEP = Number(process.env.LICENSE_BACKUP_KEEP) || 28;
+
+let _dbPath = DEFAULT_DB;
+let _backupTimer = null;
+
 export function openDb(dbPath = process.env.LICENSE_DB || DEFAULT_DB) {
+    _dbPath = dbPath;
     mkdirSync(dirname(dbPath), { recursive: true });
     const db = new Database(dbPath);
+    // WAL + FULL: меньше порчи при внезапном kill; busy_timeout — ждём вместо SQLITE_BUSY
     db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = FULL');
+    db.pragma('busy_timeout = 15000');
     db.pragma('foreign_keys = ON');
+    db.pragma('temp_store = MEMORY');
+    db.pragma('wal_autocheckpoint = 1000');
+
+    const check = db.pragma('quick_check', { simple: true });
+    if (check !== 'ok') {
+        console.error(
+            `[license] quick_check failed: ${check} — восстановите из data/backups/`,
+        );
+    }
+
     db.exec(`
         CREATE TABLE IF NOT EXISTS license_keys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +101,84 @@ export function openDb(dbPath = process.env.LICENSE_DB || DEFAULT_DB) {
         /* ignore */
     }
     return db;
+}
+
+/** Консистентный снимок (не копировать .db вручную при живом процессе). */
+export function backupDb(db, destPath) {
+    mkdirSync(dirname(destPath), { recursive: true });
+    db.backup(destPath);
+    return destPath;
+}
+
+export function backupDir() {
+    return process.env.LICENSE_BACKUP_DIR || join(dirname(_dbPath), 'backups');
+}
+
+export function rotateDbBackups(dir = backupDir(), keep = BACKUP_KEEP) {
+    if (!existsSync(dir)) return;
+    const files = readdirSync(dir)
+        .filter((n) => n.startsWith('license-') && n.endsWith('.db'))
+        .sort();
+    const excess = files.slice(0, Math.max(0, files.length - keep));
+    for (const n of excess) {
+        try {
+            unlinkSync(join(dir, n));
+        } catch {
+            /* ignore */
+        }
+    }
+}
+
+export function runDbBackup(db) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const dest = join(backupDir(), `license-${stamp}.db`);
+    backupDb(db, dest);
+    rotateDbBackups();
+    console.log(`[license] backup → ${dest}`);
+    return dest;
+}
+
+export function startDbBackupLoop(db) {
+    if (_backupTimer) clearInterval(_backupTimer);
+    // первый через 2 мин, дальше по интервалу
+    setTimeout(() => {
+        try {
+            runDbBackup(db);
+        } catch (e) {
+            console.error('[license] backup:', e.message || e);
+        }
+        _backupTimer = setInterval(() => {
+            try {
+                runDbBackup(db);
+            } catch (e) {
+                console.error('[license] backup:', e.message || e);
+            }
+        }, BACKUP_INTERVAL_MS);
+        if (typeof _backupTimer.unref === 'function') _backupTimer.unref();
+    }, 2 * 60 * 1000).unref?.();
+    console.log(
+        `[license] backups every ${BACKUP_INTERVAL_MS / 3600000}h → ${backupDir()} (keep ${BACKUP_KEEP})`,
+    );
+}
+
+/** Checkpoint WAL + закрытие. Вызывать на SIGTERM/SIGINT. */
+export function closeDb(db) {
+    if (!db) return;
+    try {
+        db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch {
+        /* ignore */
+    }
+    try {
+        db.close();
+        console.log('[license] db closed cleanly');
+    } catch (e) {
+        console.error('[license] close:', e.message || e);
+    }
+    if (_backupTimer) {
+        clearInterval(_backupTimer);
+        _backupTimer = null;
+    }
 }
 
 export function generateKeyCode() {
@@ -309,10 +408,9 @@ export function insertTrades(db, { sessionId, trades }) {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
-    let n = 0;
-    db.exec('BEGIN');
-    try {
-        for (const t of Array.isArray(trades) ? trades : []) {
+    const insertMany = db.transaction((list) => {
+        let n = 0;
+        for (const t of list) {
             const side = t.side === 'sell' ? 'sell' : 'buy';
             const price = Math.round(Number(t.price) || 0);
             const label = String(t.label || 'Предмет').slice(0, 120);
@@ -346,15 +444,10 @@ export function insertTrades(db, { sessionId, trades }) {
             );
             n += 1;
         }
-        db.exec('COMMIT');
-    } catch (e) {
-        try {
-            db.exec('ROLLBACK');
-        } catch {
-            /* ignore */
-        }
-        throw e;
-    }
+        return n;
+    });
+
+    const n = insertMany(Array.isArray(trades) ? trades : []);
     return { ok: true, inserted: n };
 }
 
@@ -632,7 +725,7 @@ export function analysisToMarkdown(pack) {
 }
 
 export function getDbPath() {
-    return process.env.LICENSE_DB || DEFAULT_DB;
+    return _dbPath || process.env.LICENSE_DB || DEFAULT_DB;
 }
 
 export { SESSION_TTL_MS, HEARTBEAT_HINT_MS };
