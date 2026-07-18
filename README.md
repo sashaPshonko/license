@@ -19,6 +19,18 @@ bash scripts/run/stop.sh
 По умолчанию: `http://0.0.0.0:8787`  
 Админка: открыть в браузере тот же URL.
 
+Вкладки:
+- **Покупки ключей** — все выдачи (дата, план, заметка, net юзера)
+- **На чём зарабатывают** — прибыль по предметам у всех подписчиков
+- **Для Cursor** — скачать `analysis.md` / `analysis.json` / `license.db`
+
+Экспорт:
+```
+GET /v1/admin/export/analysis.md?days=30
+GET /v1/admin/export/analysis.json?days=30
+GET /v1/admin/export/db
+```
+
 При первом старте создаётся **admin**-ключ (печатается в `server.log`).
 
 Проверка:
@@ -33,10 +45,14 @@ tail -f server.log
 |-----|---------|--------|
 | `PORT` | `8787` | порт |
 | `HOST` | `0.0.0.0` | bind |
-| `ADMIN_TOKEN` | пусто | если задан — нужен для `/v1/admin/*` |
+| `ADMIN_TOKEN` | пусто | доп. токен (опционально); основной вход — **admin-ключ** |
 | `LICENSE_DB` | `data/license.db` | sqlite |
-| `SESSION_TTL_MS` | `90000` | сессия умирает без heartbeat |
-| `HEARTBEAT_MS` | `30000` | подсказка клиенту |
+| `SESSION_TTL_MS` | `45000` | без heartbeat сессия умирает |
+| `HEARTBEAT_MS` | `15000` | как часто клиенту пинговать |
+
+Админка: http://host:8787/ — логин **admin-ключом** (plan=admin).
+
+Сессии: клиент шлёт heartbeat; если молчит дольше `SESSION_TTL_MS` — сессия неактивна, можно войти снова.
 
 ## Bot API
 

@@ -7,8 +7,8 @@ import { randomBytes } from 'crypto';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DB = join(__dirname, '..', 'data', 'license.db');
 
-const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 90_000;
-const HEARTBEAT_HINT_MS = Number(process.env.HEARTBEAT_MS) || 30_000;
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || 45_000;
+const HEARTBEAT_HINT_MS = Number(process.env.HEARTBEAT_MS) || 15_000;
 
 export function openDb(dbPath = process.env.LICENSE_DB || DEFAULT_DB) {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -111,7 +111,7 @@ export function maxBotsForPlan(plan) {
     return 1; // normal
 }
 
-/** Закрыть протухшие сессии (нет heartbeat). */
+/** Закрыть сессии без свежего heartbeat. */
 export function reapStaleSessions(db) {
     const cutoff = new Date(Date.now() - SESSION_TTL_MS).toISOString();
     db.prepare(
@@ -121,17 +121,38 @@ export function reapStaleSessions(db) {
     ).run(nowIso(), cutoff);
 }
 
+/** Сессия жива только пока клиент пингует в пределах TTL. */
+export function isSessionFresh(row) {
+    if (!row || row.ended_at) return false;
+    const seen = new Date(row.last_seen_at).getTime();
+    if (!Number.isFinite(seen)) return false;
+    return Date.now() - seen < SESSION_TTL_MS;
+}
+
 export function getKeyByCode(db, keyCode) {
     return db
         .prepare(`SELECT * FROM license_keys WHERE key_code = ?`)
         .get(String(keyCode || '').trim());
 }
 
+/** Admin-ключ (plan=admin, не revoked) или env ADMIN_TOKEN. */
+export function isAdminAuth(db, token, envToken = '') {
+    const t = String(token || '').trim();
+    if (!t) return false;
+    if (envToken && t === envToken) return true;
+    const key = getKeyByCode(db, t);
+    return Boolean(key && key.plan === 'admin' && isKeyActive(key));
+}
+
 export function countActiveSessions(db, keyId) {
     reapStaleSessions(db);
+    const cutoff = new Date(Date.now() - SESSION_TTL_MS).toISOString();
     return db
-        .prepare(`SELECT COUNT(*) AS n FROM sessions WHERE key_id = ? AND ended_at IS NULL`)
-        .get(keyId).n;
+        .prepare(
+            `SELECT COUNT(*) AS n FROM sessions
+             WHERE key_id = ? AND ended_at IS NULL AND last_seen_at >= ?`,
+        )
+        .get(keyId, cutoff).n;
 }
 
 export function createKey(db, { plan, days, note } = {}) {
@@ -169,17 +190,40 @@ export function listKeys(db) {
         .all();
 }
 
+export function endOpenSessionsForKey(db, keyId, reason = 'replaced') {
+    return db
+        .prepare(
+            `UPDATE sessions
+             SET ended_at = ?, end_reason = ?
+             WHERE key_id = ? AND ended_at IS NULL`,
+        )
+        .run(nowIso(), reason || 'replaced', keyId).changes;
+}
+
+export function listOpenSessions(db, keyId) {
+    reapStaleSessions(db);
+    const cutoff = new Date(Date.now() - SESSION_TTL_MS).toISOString();
+    return db
+        .prepare(
+            `SELECT id, device_id, started_at, last_seen_at
+             FROM sessions
+             WHERE key_id = ? AND ended_at IS NULL AND last_seen_at >= ?`,
+        )
+        .all(keyId, cutoff);
+}
+
 export function startSession(db, { keyCode, deviceId, appVersion }) {
     reapStaleSessions(db);
     const key = getKeyByCode(db, keyCode);
     const at = nowIso();
+    const device = deviceId ? String(deviceId) : '';
 
     const fail = (reason) => {
         if (key) {
             db.prepare(
                 `INSERT INTO launches (key_id, session_id, device_id, app_version, at, ok, reason)
                  VALUES (?, NULL, ?, ?, ?, 0, ?)`,
-            ).run(key.id, deviceId || null, appVersion || null, at, reason);
+            ).run(key.id, device || null, appVersion || null, at, reason);
         }
         return { ok: false, reason };
     };
@@ -188,21 +232,33 @@ export function startSession(db, { keyCode, deviceId, appVersion }) {
     if (key.revoked) return fail('revoked');
     if (!isKeyActive(key)) return fail('expired');
 
-    const active = countActiveSessions(db, key.id);
-    if (key.plan !== 'admin' && active >= 1) {
-        return fail('already_running');
+    if (key.plan !== 'admin') {
+        const open = listOpenSessions(db, key.id);
+        if (open.length >= 1) {
+            // Тот же deviceId → перехватываем (закрыли приложение без stop / рестарт).
+            // Сессии без device_id (старые) тоже можно сбросить с этого устройства.
+            // Чужое устройство → already_running.
+            const reclaimable =
+                Boolean(device) &&
+                open.every((s) => !s.device_id || s.device_id === device);
+            if (reclaimable) {
+                endOpenSessionsForKey(db, key.id, 'takeover');
+            } else {
+                return fail('already_running');
+            }
+        }
     }
 
     const sessionId = randomBytes(16).toString('hex');
     db.prepare(
         `INSERT INTO sessions (id, key_id, device_id, app_version, started_at, last_seen_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(sessionId, key.id, deviceId || null, appVersion || null, at, at);
+    ).run(sessionId, key.id, device || null, appVersion || null, at, at);
 
     db.prepare(
         `INSERT INTO launches (key_id, session_id, device_id, app_version, at, ok, reason)
          VALUES (?, ?, ?, ?, ?, 1, NULL)`,
-    ).run(key.id, sessionId, deviceId || null, appVersion || null, at);
+    ).run(key.id, sessionId, device || null, appVersion || null, at);
 
     return {
         ok: true,
@@ -403,6 +459,180 @@ export function listLaunches(db, { keyId, limit = 100 } = {}) {
              LIMIT ?`,
         )
         .all(keyId ?? null, keyId ?? null, Math.min(Number(limit) || 100, 500));
+}
+
+/** Что реально зарабатывает у людей: предметы + кто торгует. */
+export function itemLeaderboard(db, { days } = {}) {
+    const since =
+        days && Number(days) > 0
+            ? new Date(Date.now() - Number(days) * 86400000).toISOString()
+            : null;
+
+    const items = db
+        .prepare(
+            `SELECT label,
+                COALESCE(NULLIF(item_type, ''), '') AS item_type,
+                COUNT(*) AS trades,
+                SUM(CASE WHEN side='buy' THEN 1 ELSE 0 END) AS buys,
+                SUM(CASE WHEN side='sell' THEN 1 ELSE 0 END) AS sells,
+                COUNT(DISTINCT key_id) AS keys_trading,
+                COALESCE(SUM(CASE WHEN side='sell' THEN price ELSE 0 END), 0) AS sold,
+                COALESCE(SUM(CASE WHEN side='buy' THEN price ELSE 0 END), 0) AS bought,
+                COALESCE(SUM(CASE WHEN side='sell' THEN price ELSE -price END), 0) AS net,
+                CAST(AVG(CASE WHEN side='buy' THEN price END) AS INTEGER) AS avg_buy,
+                CAST(AVG(CASE WHEN side='sell' THEN price END) AS INTEGER) AS avg_sell,
+                CAST(AVG(integrity) AS REAL) AS avg_integrity
+             FROM trades
+             WHERE (? IS NULL OR ts >= ?)
+             GROUP BY label, item_type
+             ORDER BY net DESC
+             LIMIT 200`,
+        )
+        .all(since, since);
+
+    const byKeyItem = db
+        .prepare(
+            `SELECT k.key_code, k.plan, k.note, t.label,
+                COALESCE(NULLIF(t.item_type, ''), '') AS item_type,
+                COUNT(*) AS trades,
+                SUM(CASE WHEN t.side='buy' THEN 1 ELSE 0 END) AS buys,
+                SUM(CASE WHEN t.side='sell' THEN 1 ELSE 0 END) AS sells,
+                COALESCE(SUM(CASE WHEN t.side='sell' THEN t.price ELSE 0 END), 0) AS sold,
+                COALESCE(SUM(CASE WHEN t.side='buy' THEN t.price ELSE 0 END), 0) AS bought,
+                COALESCE(SUM(CASE WHEN t.side='sell' THEN t.price ELSE -t.price END), 0) AS net,
+                CAST(AVG(CASE WHEN t.side='buy' THEN t.price END) AS INTEGER) AS avg_buy,
+                CAST(AVG(CASE WHEN t.side='sell' THEN t.price END) AS INTEGER) AS avg_sell
+             FROM trades t
+             JOIN license_keys k ON k.id = t.key_id
+             WHERE (? IS NULL OR t.ts >= ?)
+             GROUP BY k.id, t.label, t.item_type
+             HAVING net != 0 OR trades > 0
+             ORDER BY net DESC
+             LIMIT 500`,
+        )
+        .all(since, since);
+
+    return { items, byKeyItem, since, days: days ? Number(days) : null };
+}
+
+/** Пакет для анализа в Cursor: ключи + топ предметов + сводка. */
+export function buildAnalysisPack(db, { days = 30 } = {}) {
+    const d = Number(days) || 30;
+    const keys = listKeys(db);
+    const profit = profitSummary(db, { days: d });
+    const board = itemLeaderboard(db, { days: d });
+    const recent = listTrades(db, { limit: 300 });
+
+    const purchases = keys
+        .filter((k) => k.plan !== 'admin')
+        .map((k) => ({
+            created_at: k.created_at,
+            plan: k.plan,
+            note: k.note || '',
+            key_code: k.key_code,
+            expires_at: k.expires_at,
+            revoked: Boolean(k.revoked),
+            launch_count: k.launch_count || 0,
+            trade_count: k.trade_count || 0,
+            net_profit: k.net_profit || 0,
+        }));
+
+    const topItems = (board.items || []).slice(0, 40).map((r) => ({
+        label: r.label,
+        item_type: r.item_type,
+        net: r.net,
+        buys: r.buys,
+        sells: r.sells,
+        keys_trading: r.keys_trading,
+        avg_buy: r.avg_buy,
+        avg_sell: r.avg_sell,
+        margin: r.avg_buy && r.avg_sell ? Math.round(r.avg_sell - r.avg_buy) : null,
+        avg_integrity: r.avg_integrity,
+    }));
+
+    return {
+        generated_at: nowIso(),
+        period_days: d,
+        purpose:
+            'Анализ практик botpodpopcorn: какие предметы/цены дают прибыль у подписчиков. Цель — перенять в 4narek.',
+        purchases,
+        top_items_by_net: topItems,
+        profit_by_key: profit.byKey,
+        profit_by_day: profit.byDay,
+        key_item_breakdown: (board.byKeyItem || []).slice(0, 200),
+        recent_trades: recent.map((t) => ({
+            ts: t.ts,
+            key: t.key_code,
+            side: t.side,
+            label: t.label,
+            type: t.item_type,
+            price: t.price,
+            integrity: t.integrity,
+            anarchy: t.anarchy,
+            enchants: t.enchants_json,
+        })),
+        stats: {
+            keys_total: keys.length,
+            purchases_total: purchases.length,
+            trades_in_period: (profit.byDay || []).reduce((s, r) => s + (r.trades || 0), 0),
+            net_in_period: (profit.byDay || []).reduce((s, r) => s + (r.net || 0), 0),
+        },
+    };
+}
+
+export function analysisToMarkdown(pack) {
+    const lines = [];
+    lines.push(`# botpodpopcorn — анализ для Cursor`);
+    lines.push('');
+    lines.push(`Сгенерировано: ${pack.generated_at}`);
+    lines.push(`Период: ${pack.period_days} дней`);
+    lines.push('');
+    lines.push(pack.purpose);
+    lines.push('');
+    lines.push(`## Сводка`);
+    lines.push(`- Покупок ключей (не admin): ${pack.stats.purchases_total}`);
+    lines.push(`- Сделок за период: ${pack.stats.trades_in_period}`);
+    lines.push(`- Net за период: ${pack.stats.net_in_period}`);
+    lines.push('');
+    lines.push(`## Покупки ключей`);
+    lines.push(`| когда | план | заметка | ключ | net юзера | сделки |`);
+    lines.push(`|---|---|---|---|---:|---:|`);
+    for (const p of pack.purchases || []) {
+        lines.push(
+            `| ${p.created_at} | ${p.plan} | ${String(p.note || '').replace(/\|/g, '/')} | \`${p.key_code}\` | ${p.net_profit} | ${p.trade_count} |`,
+        );
+    }
+    lines.push('');
+    lines.push(`## Топ предметов по net (что зарабатывает)`);
+    lines.push(
+        `| label | type | net | buy/sell | ключей | avg buy | avg sell | маржа |`,
+    );
+    lines.push(`|---|---|---:|---:|---:|---:|---:|---:|`);
+    for (const it of pack.top_items_by_net || []) {
+        lines.push(
+            `| ${it.label} | ${it.item_type || '—'} | ${it.net} | ${it.buys}/${it.sells} | ${it.keys_trading} | ${it.avg_buy ?? '—'} | ${it.avg_sell ?? '—'} | ${it.margin ?? '—'} |`,
+        );
+    }
+    lines.push('');
+    lines.push(`## Разбивка ключ × предмет`);
+    lines.push(`| ключ | план | label | net | avg buy | avg sell |`);
+    lines.push(`|---|---|---|---:|---:|---:|`);
+    for (const r of pack.key_item_breakdown || []) {
+        lines.push(
+            `| \`${r.key_code}\` | ${r.plan} | ${r.label} | ${r.net} | ${r.avg_buy ?? '—'} | ${r.avg_sell ?? '—'} |`,
+        );
+    }
+    lines.push('');
+    lines.push(`## Задача для Cursor`);
+    lines.push(
+        `На основе таблиц выше предложи, какие предметы/диапазоны цен/целостность/чары стоит перенять в 4narek, чтобы зарабатывать. Без логинов/паролей — только рыночная практика.`,
+    );
+    lines.push('');
+    return lines.join('\n');
+}
+
+export function getDbPath() {
+    return process.env.LICENSE_DB || DEFAULT_DB;
 }
 
 export { SESSION_TTL_MS, HEARTBEAT_HINT_MS };

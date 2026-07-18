@@ -1,6 +1,6 @@
 import { createServer } from 'http';
-import { readFileSync, existsSync } from 'fs';
-import { join, dirname, extname } from 'path';
+import { readFileSync, existsSync, createReadStream } from 'fs';
+import { join, dirname, extname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import {
     openDb,
@@ -15,13 +15,18 @@ import {
     listLaunches,
     getKeyByCode,
     nowIso,
+    itemLeaderboard,
+    buildAnalysisPack,
+    analysisToMarkdown,
+    getDbPath,
+    isAdminAuth,
 } from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
 const PORT = Number(process.env.PORT) || 8787;
 const HOST = process.env.HOST || '0.0.0.0';
-/** Если задан — админ API требует заголовок X-Admin-Token или ?token= */
+/** Опциональный env-токен. Основной вход — admin license key. */
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 const db = openDb();
@@ -31,6 +36,14 @@ const existing = db.prepare(`SELECT COUNT(*) AS n FROM license_keys`).get().n;
 if (existing === 0) {
     const admin = createKey(db, { plan: 'admin', note: 'bootstrap admin' });
     console.log(`[license] bootstrap admin key: ${admin.key_code}`);
+} else {
+    const hasAdmin = db
+        .prepare(`SELECT COUNT(*) AS n FROM license_keys WHERE plan = 'admin' AND revoked = 0`)
+        .get().n;
+    if (!hasAdmin) {
+        const admin = createKey(db, { plan: 'admin', note: 'bootstrap admin' });
+        console.log(`[license] created missing admin key: ${admin.key_code}`);
+    }
 }
 
 const MIME = {
@@ -40,6 +53,9 @@ const MIME = {
     '.svg': 'image/svg+xml',
     '.png': 'image/png',
     '.ico': 'image/x-icon',
+    '.md': 'text/markdown; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.db': 'application/octet-stream',
 };
 
 function sendJson(res, status, body) {
@@ -51,6 +67,17 @@ function sendJson(res, status, body) {
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     });
     res.end(raw);
+}
+
+function sendDownload(res, { status = 200, filename, contentType, body }) {
+    res.writeHead(status, {
+        'Content-Type': contentType,
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, X-Admin-Token, Authorization',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    });
+    res.end(body);
 }
 
 function readBody(req) {
@@ -70,13 +97,16 @@ function readBody(req) {
     });
 }
 
+function extractAdminToken(req, url) {
+    const header = String(req.headers['x-admin-token'] || '').trim();
+    const q = String(url.searchParams.get('token') || '').trim();
+    const auth = String(req.headers.authorization || '');
+    const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    return header || q || bearer || '';
+}
+
 function requireAdmin(req, url) {
-    if (!ADMIN_TOKEN) return true;
-    const header = req.headers['x-admin-token'] || '';
-    const q = url.searchParams.get('token') || '';
-    const auth = req.headers.authorization || '';
-    const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-    return header === ADMIN_TOKEN || q === ADMIN_TOKEN || bearer === ADMIN_TOKEN;
+    return isAdminAuth(db, extractAdminToken(req, url), ADMIN_TOKEN);
 }
 
 async function handleApi(req, res, url) {
@@ -130,6 +160,37 @@ async function handleApi(req, res, url) {
 
     // --- admin API ---
     if (path.startsWith('/v1/admin/')) {
+        // Логин по admin-ключу (без предварительного токена)
+        if (path === '/v1/admin/login' && req.method === 'POST') {
+            const body = await readBody(req);
+            const keyCode = String(body.key || body.token || '').trim();
+            if (!isAdminAuth(db, keyCode, ADMIN_TOKEN)) {
+                sendJson(res, 401, { ok: false, reason: 'unauthorized' });
+                return;
+            }
+            const key = getKeyByCode(db, keyCode);
+            sendJson(res, 200, {
+                ok: true,
+                plan: key?.plan || 'admin',
+                note: key?.note || null,
+            });
+            return;
+        }
+
+        if (path === '/v1/admin/me' && req.method === 'GET') {
+            if (!requireAdmin(req, url)) {
+                sendJson(res, 401, { ok: false, reason: 'unauthorized' });
+                return;
+            }
+            const tok = extractAdminToken(req, url);
+            const key = getKeyByCode(db, tok);
+            sendJson(res, 200, {
+                ok: true,
+                plan: key?.plan || (ADMIN_TOKEN && tok === ADMIN_TOKEN ? 'env' : 'admin'),
+            });
+            return;
+        }
+
         if (!requireAdmin(req, url)) {
             sendJson(res, 401, { ok: false, reason: 'unauthorized' });
             return;
@@ -184,6 +245,17 @@ async function handleApi(req, res, url) {
             return;
         }
 
+        if (path === '/v1/admin/items' && req.method === 'GET') {
+            const days = url.searchParams.get('days');
+            sendJson(res, 200, {
+                ok: true,
+                ...itemLeaderboard(db, {
+                    days: days ? Number(days) : 30,
+                }),
+            });
+            return;
+        }
+
         if (path === '/v1/admin/trades' && req.method === 'GET') {
             const keyId = url.searchParams.get('keyId');
             const limit = url.searchParams.get('limit');
@@ -205,6 +277,49 @@ async function handleApi(req, res, url) {
                     keyId: keyId ? Number(keyId) : null,
                 }),
             });
+            return;
+        }
+
+        if (path === '/v1/admin/export/analysis.json' && req.method === 'GET') {
+            const days = Number(url.searchParams.get('days')) || 30;
+            const pack = buildAnalysisPack(db, { days });
+            sendDownload(res, {
+                filename: `botpodpopcorn-analysis-${days}d.json`,
+                contentType: 'application/json; charset=utf-8',
+                body: JSON.stringify(pack, null, 2),
+            });
+            return;
+        }
+
+        if (path === '/v1/admin/export/analysis.md' && req.method === 'GET') {
+            const days = Number(url.searchParams.get('days')) || 30;
+            const pack = buildAnalysisPack(db, { days });
+            sendDownload(res, {
+                filename: `botpodpopcorn-analysis-${days}d.md`,
+                contentType: 'text/markdown; charset=utf-8',
+                body: analysisToMarkdown(pack),
+            });
+            return;
+        }
+
+        if (path === '/v1/admin/export/db' && req.method === 'GET') {
+            try {
+                db.pragma('wal_checkpoint(TRUNCATE)');
+            } catch {
+                /* ignore */
+            }
+            const dbPath = getDbPath();
+            if (!existsSync(dbPath)) {
+                sendJson(res, 404, { ok: false, reason: 'db_missing' });
+                return;
+            }
+            const name = basename(dbPath) || 'license.db';
+            res.writeHead(200, {
+                'Content-Type': 'application/octet-stream',
+                'Content-Disposition': `attachment; filename="${name}"`,
+                'Access-Control-Allow-Origin': '*',
+            });
+            createReadStream(dbPath).pipe(res);
             return;
         }
     }
@@ -241,6 +356,6 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
     console.log(`[license] botpodpopcorn listening http://${HOST}:${PORT}`);
-    if (ADMIN_TOKEN) console.log('[license] ADMIN_TOKEN required for /v1/admin/*');
-    else console.log('[license] admin API open (set ADMIN_TOKEN to lock)');
+    console.log('[license] admin panel: login with an admin plan key');
+    if (ADMIN_TOKEN) console.log('[license] ADMIN_TOKEN also accepted');
 });

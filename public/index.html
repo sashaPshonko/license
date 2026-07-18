@@ -3,24 +3,134 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>botpodpopcorn — лицензии</title>
+  <title>botpodpopcorn — админ</title>
   <link rel="stylesheet" href="/styles.css" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 </head>
 <body>
-  <div class="wrap">
+  <div id="gate" class="gate">
+    <div class="gate-card">
+      <h1>botpodpopcorn</h1>
+      <p class="sub">вход в админку — только admin-ключ</p>
+      <label>Admin key
+        <input id="gateKey" type="password" autocomplete="off" spellcheck="false" placeholder="POP-…" />
+      </label>
+      <button type="button" id="gateUnlock" class="primary-btn">Войти</button>
+      <p id="gateError" class="gate-error hidden"></p>
+    </div>
+  </div>
+
+  <div id="adminApp" class="wrap hidden">
     <header>
       <div>
         <h1>botpodpopcorn</h1>
-        <p class="sub">ключи · сессии · прибыль</p>
+        <p class="sub">покупки · предметы · экспорт для Cursor</p>
       </div>
-      <label class="token">
-        admin token
-        <input id="adminToken" type="password" placeholder="пусто = открыто" />
-      </label>
+      <div class="header-right">
+        <span id="adminWho" class="muted mono"></span>
+        <label class="inline days-label">
+          период
+          <select id="periodDays">
+            <option value="7">7 дн</option>
+            <option value="14">14 дн</option>
+            <option value="30" selected>30 дн</option>
+            <option value="90">90 дн</option>
+            <option value="0">всё время</option>
+          </select>
+        </label>
+        <button type="button" id="refreshAll" class="ghost">обновить</button>
+        <button type="button" id="logoutBtn" class="ghost">выйти</button>
+      </div>
     </header>
 
-    <section class="card">
+    <div id="flash" class="flash hidden"></div>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab active" data-tab="purchases">Покупки ключей</button>
+      <button type="button" class="tab" data-tab="items">На чём зарабатывают</button>
+      <button type="button" class="tab" data-tab="issue">Выдать ключ</button>
+      <button type="button" class="tab" data-tab="export">Для Cursor</button>
+      <button type="button" class="tab" data-tab="raw">Сделки / запуски</button>
+    </nav>
+
+    <!-- Покупки -->
+    <section id="tab-purchases" class="tab-panel card">
+      <div class="row between">
+        <div>
+          <h2>Все выданные ключи</h2>
+          <p class="hint">Каждая строка = покупка / выдача. Admin-ключи в конце.</p>
+        </div>
+        <div id="purchaseStats" class="stat-pills"></div>
+      </div>
+      <div class="table-wrap">
+        <table id="purchasesTable">
+          <thead>
+            <tr>
+              <th>когда</th>
+              <th>план</th>
+              <th>заметка / покупатель</th>
+              <th>ключ</th>
+              <th>до</th>
+              <th>запуски</th>
+              <th>сделки</th>
+              <th>net юзера</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Предметы -->
+    <section id="tab-items" class="tab-panel card hidden">
+      <div class="row between">
+        <div>
+          <h2>Прибыль по предметам</h2>
+          <p class="hint">Сводно по всем подписчикам — что реально приносит деньги.</p>
+        </div>
+      </div>
+      <div class="table-wrap" style="margin-bottom:18px">
+        <table id="itemsTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>предмет</th>
+              <th>тип</th>
+              <th>net</th>
+              <th>buy / sell</th>
+              <th>ключей</th>
+              <th>avg buy</th>
+              <th>avg sell</th>
+              <th>маржа</th>
+              <th>целостн.</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <h3 class="h3">Разбивка: кто чем торгует</h3>
+      <div class="table-wrap">
+        <table id="keyItemTable">
+          <thead>
+            <tr>
+              <th>ключ</th>
+              <th>план</th>
+              <th>заметка</th>
+              <th>предмет</th>
+              <th>net</th>
+              <th>avg buy</th>
+              <th>avg sell</th>
+              <th>сделок</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Выдать -->
+    <section id="tab-issue" class="tab-panel card hidden">
       <h2>Выдать ключ</h2>
       <form id="issueForm" class="row">
         <label>тип
@@ -31,84 +141,47 @@
           </select>
         </label>
         <label>дней
-          <input id="days" type="number" min="1" value="30" />
+          <input id="days" type="number" min="1" value="7" />
         </label>
-        <label>заметка
-          <input id="note" type="text" placeholder="покупатель / заказ" />
+        <label>заметка (покупатель / заказ)
+          <input id="note" type="text" placeholder="PlayerOK #… / ник" style="min-width:220px" />
         </label>
         <button type="submit">создать</button>
       </form>
       <p id="issueResult" class="mono"></p>
     </section>
 
-    <section class="card">
-      <div class="row between">
-        <h2>Ключи</h2>
-        <button type="button" id="refreshKeys" class="ghost">обновить</button>
+    <!-- Cursor export -->
+    <section id="tab-export" class="tab-panel card hidden">
+      <h2>Скормить Cursor</h2>
+      <p class="hint">
+        Скачай отчёт и кинь файл (или текст) в чат Cursor рядом с репо <code>4narek</code> —
+        попроси найти практики, которые стоит перенять.
+      </p>
+      <div class="export-grid">
+        <button type="button" id="dlMd" class="export-btn">Скачать analysis.md</button>
+        <button type="button" id="dlJson" class="export-btn ghost">Скачать analysis.json</button>
+        <button type="button" id="dlDb" class="export-btn ghost">Скачать license.db</button>
+        <button type="button" id="copyMd" class="export-btn ghost">Скопировать md в буфер</button>
       </div>
-      <div class="table-wrap">
-        <table id="keysTable">
-          <thead>
-            <tr>
-              <th>ключ</th>
-              <th>план</th>
-              <th>до</th>
-              <th>сессии</th>
-              <th>запуски</th>
-              <th>net</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
+      <pre id="exportPreview" class="export-preview muted">Превью появится после «Скопировать» или загрузки…</pre>
+      <p class="hint" style="margin-top:12px">
+        Промпт: <em>«Вот выгрузка botpodpopcorn. Какие предметы/цены/целостность стоит перенять в 4narek?»</em>
+      </p>
     </section>
 
-    <section class="card">
-      <div class="row between">
-        <h2>Прибыль</h2>
-        <div class="row filters">
-          <label class="inline">ключ
-            <select id="profitKey">
-              <option value="">все</option>
-            </select>
-          </label>
-          <label class="inline">дней
-            <input id="profitDays" type="number" min="1" value="14" />
-          </label>
-        </div>
+    <!-- Raw -->
+    <section id="tab-raw" class="tab-panel card hidden">
+      <div class="row between" style="margin-bottom:10px">
+        <h2>Сделки и запуски</h2>
+        <label class="inline">ключ
+          <select id="profitKey">
+            <option value="">все</option>
+          </select>
+        </label>
       </div>
-      <div class="table-wrap" style="margin-bottom:14px">
-        <table id="keyProfitTable">
-          <thead><tr><th>ключ</th><th>план</th><th>сделки</th><th>куп</th><th>прод</th><th>net</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="grid2">
-        <div>
-          <h3 class="h3">по дням</h3>
-          <div class="table-wrap">
-            <table id="dayTable">
-              <thead><tr><th>день</th><th>сделки</th><th>куп</th><th>прод</th><th>net</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-        <div>
-          <h3 class="h3">по предметам (label)</h3>
-          <div class="table-wrap">
-            <table id="labelTable">
-              <thead><tr><th>label</th><th>buy</th><th>sell</th><th>куп</th><th>прод</th><th>net</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>Последние сделки</h2>
-      <div class="table-wrap">
+      <h3 class="h3">Последние сделки</h3>
+      <div class="table-wrap" style="margin-bottom:16px">
         <table id="tradesTable">
           <thead>
             <tr>
@@ -126,10 +199,7 @@
           <tbody></tbody>
         </table>
       </div>
-    </section>
-
-    <section class="card">
-      <h2>Запуски</h2>
+      <h3 class="h3">Запуски</h3>
       <div class="table-wrap">
         <table id="launchesTable">
           <thead>
