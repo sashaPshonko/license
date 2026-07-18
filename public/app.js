@@ -398,6 +398,23 @@ $('dlDb')?.addEventListener('click', () => {
   window.location.href = `/v1/admin/export/db${q}`;
 });
 
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand('copy');
+  ta.remove();
+  if (!ok) throw new Error('копирование недоступно');
+}
+
 $('copyMd')?.addEventListener('click', async () => {
   try {
     const res = await fetch(exportUrl('/v1/admin/export/analysis.md'), {
@@ -405,7 +422,7 @@ $('copyMd')?.addEventListener('click', async () => {
     });
     const text = await res.text();
     if (!res.ok) throw new Error(text || res.statusText);
-    await navigator.clipboard.writeText(text);
+    await copyText(text);
     $('exportPreview').textContent = text.slice(0, 4000) + (text.length > 4000 ? '\n…' : '');
     flash('analysis.md скопирован — вставь в Cursor');
   } catch (e) {
