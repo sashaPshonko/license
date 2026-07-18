@@ -50,6 +50,19 @@ tail -f server.log
 | `SESSION_TTL_MS` | `45000` | без heartbeat сессия умирает |
 | `HEARTBEAT_MS` | `15000` | как часто клиенту пинговать |
 
+### App updates
+
+Статика для `electron-updater` (generic):
+
+```
+GET /updates/latest.yml
+GET /updates/botpodpopcorn-…-win-x64.exe
+GET /updates/latest-mac.yml
+…
+```
+
+Файлы лежат в `license/updates/` (не в git). Заливка с Mac: `oluh-bot` → `npm run push:updates`.
+
 Админка: http://host:8787/ — логин **admin-ключом** (plan=admin).
 
 Сессии: клиент шлёт heartbeat; если молчит дольше `SESSION_TTL_MS` — сессия неактивна, можно войти снова.

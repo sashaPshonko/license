@@ -51,7 +51,6 @@
       <button type="button" class="tab" data-tab="items">На чём зарабатывают</button>
       <button type="button" class="tab" data-tab="issue">Выдать ключ</button>
       <button type="button" class="tab" data-tab="export">Для Cursor</button>
-      <button type="button" class="tab" data-tab="raw">Сделки / запуски</button>
     </nav>
 
     <!-- Покупки -->
@@ -72,7 +71,6 @@
               <th>заметка / покупатель</th>
               <th>ключ</th>
               <th>до</th>
-              <th>запуски</th>
               <th>сделки</th>
               <th>net юзера</th>
               <th></th>
@@ -169,52 +167,6 @@
       <p class="hint" style="margin-top:12px">
         Промпт: <em>«Вот выгрузка botpodpopcorn. Какие предметы/цены/целостность стоит перенять в 4narek?»</em>
       </p>
-    </section>
-
-    <!-- Raw -->
-    <section id="tab-raw" class="tab-panel card hidden">
-      <div class="row between" style="margin-bottom:10px">
-        <h2>Сделки и запуски</h2>
-        <label class="inline">ключ
-          <select id="profitKey">
-            <option value="">все</option>
-          </select>
-        </label>
-      </div>
-      <h3 class="h3">Последние сделки</h3>
-      <div class="table-wrap" style="margin-bottom:16px">
-        <table id="tradesTable">
-          <thead>
-            <tr>
-              <th>время</th>
-              <th>ключ</th>
-              <th>side</th>
-              <th>label</th>
-              <th>тип</th>
-              <th>цена</th>
-              <th>целостн.</th>
-              <th>анарх.</th>
-              <th>чары</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <h3 class="h3">Запуски</h3>
-      <div class="table-wrap">
-        <table id="launchesTable">
-          <thead>
-            <tr>
-              <th>время</th>
-              <th>ключ</th>
-              <th>ok</th>
-              <th>device</th>
-              <th>причина</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
     </section>
   </div>
   <script src="/app.js"></script>

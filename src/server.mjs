@@ -1,5 +1,11 @@
 import { createServer } from 'http';
-import { readFileSync, existsSync, createReadStream, unlinkSync } from 'fs';
+import {
+    readFileSync,
+    existsSync,
+    createReadStream,
+    unlinkSync,
+    statSync,
+} from 'fs';
 import { join, dirname, extname, basename } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
@@ -28,11 +34,21 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
+const UPDATES = join(__dirname, '..', 'updates');
 const PORT = Number(process.env.PORT) || 8787;
 const HOST = process.env.HOST || '0.0.0.0';
 /** Опциональный env-токен. Основной вход — admin license key. */
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
+const UPDATE_MIME = {
+    '.yml': 'text/yaml; charset=utf-8',
+    '.yaml': 'text/yaml; charset=utf-8',
+    '.exe': 'application/octet-stream',
+    '.zip': 'application/zip',
+    '.dmg': 'application/octet-stream',
+    '.blockmap': 'application/octet-stream',
+    '.json': 'application/json',
+};
 const db = openDb();
 
 function ensureAdminKeyLogged() {
@@ -357,6 +373,68 @@ async function handleApi(req, res, url) {
     sendJson(res, 404, { ok: false, reason: 'not_found' });
 }
 
+function serveUpdates(req, res, url) {
+    let rel = decodeURIComponent(url.pathname.slice('/updates'.length));
+    if (rel.startsWith('/')) rel = rel.slice(1);
+    if (!rel || rel.includes('..') || rel.includes('\\')) {
+        res.writeHead(404);
+        res.end('not found');
+        return;
+    }
+    const file = join(UPDATES, rel);
+    if (!file.startsWith(UPDATES) || !existsSync(file)) {
+        res.writeHead(404);
+        res.end('not found');
+        return;
+    }
+    let st;
+    try {
+        st = statSync(file);
+    } catch {
+        res.writeHead(404);
+        res.end('not found');
+        return;
+    }
+    if (!st.isFile()) {
+        res.writeHead(404);
+        res.end('not found');
+        return;
+    }
+    const ext = extname(file).toLowerCase();
+    const headers = {
+        'Content-Type': UPDATE_MIME[ext] || 'application/octet-stream',
+        'Content-Length': st.size,
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
+        'Accept-Ranges': 'bytes',
+    };
+    if (req.method === 'HEAD') {
+        res.writeHead(200, headers);
+        res.end();
+        return;
+    }
+    const range = req.headers.range;
+    if (range) {
+        const m = /^bytes=(\d*)-(\d*)$/.exec(String(range));
+        if (m) {
+            const start = m[1] ? Number(m[1]) : 0;
+            const end = m[2] ? Number(m[2]) : st.size - 1;
+            if (start <= end && start < st.size) {
+                const to = Math.min(end, st.size - 1);
+                res.writeHead(206, {
+                    ...headers,
+                    'Content-Length': to - start + 1,
+                    'Content-Range': `bytes ${start}-${to}/${st.size}`,
+                });
+                createReadStream(file, { start, end: to }).pipe(res);
+                return;
+            }
+        }
+    }
+    res.writeHead(200, headers);
+    createReadStream(file).pipe(res);
+}
+
 function serveStatic(req, res, url) {
     let rel = url.pathname === '/' ? '/index.html' : url.pathname;
     rel = rel.replace(/\.\./g, '');
@@ -374,6 +452,15 @@ function serveStatic(req, res, url) {
 const server = createServer(async (req, res) => {
     try {
         const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+        if (url.pathname === '/updates' || url.pathname.startsWith('/updates/')) {
+            if (req.method === 'HEAD' || req.method === 'GET') {
+                serveUpdates(req, res, url);
+                return;
+            }
+            res.writeHead(405);
+            res.end('method not allowed');
+            return;
+        }
         if (url.pathname.startsWith('/v1/')) {
             await handleApi(req, res, url);
             return;

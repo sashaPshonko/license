@@ -81,25 +81,6 @@ function flash(msg, bad = false) {
   flash._t = setTimeout(() => el.classList.add('hidden'), 4000);
 }
 
-function selectedKeyId() {
-  const v = $('profitKey')?.value;
-  return v ? Number(v) : null;
-}
-
-function fillKeyFilter(keys) {
-  const sel = $('profitKey');
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">все</option>';
-  for (const k of keys || []) {
-    const opt = document.createElement('option');
-    opt.value = String(k.id);
-    opt.textContent = `${k.key_code} (${k.plan})${k.note ? ` · ${k.note}` : ''}`;
-    sel.appendChild(opt);
-  }
-  if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
-}
-
 /* tabs */
 document.querySelectorAll('.tab').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -146,7 +127,6 @@ async function revokeKey(keyCode) {
 
 async function refreshPurchases() {
   const data = await api('/v1/admin/keys');
-  fillKeyFilter(data.keys);
   const keys = data.keys || [];
   const sales = keys.filter((k) => k.plan !== 'admin');
   const active = sales.filter(
@@ -181,7 +161,6 @@ async function refreshPurchases() {
       <td>${k.note ? escapeHtml(k.note) : '<span class="muted">—</span>'}</td>
       <td class="mono" title="${escapeHtml(k.key_code)}">${escapeHtml(k.key_code)}</td>
       <td>${k.plan === 'admin' ? '∞' : fmtDate(k.expires_at)}</td>
-      <td>${k.launch_count || 0}</td>
       <td>${k.trade_count || 0}</td>
       <td class="${(k.net_profit || 0) >= 0 ? 'ok' : 'bad'}">${fmtMoney(k.net_profit)}</td>
       <td>${
@@ -252,59 +231,9 @@ async function refreshItems() {
   }
 }
 
-async function refreshTrades() {
-  const keyId = selectedKeyId();
-  const q = new URLSearchParams({ limit: '150' });
-  if (keyId) q.set('keyId', String(keyId));
-  const data = await api(`/v1/admin/trades?${q}`);
-  const tb = $('tradesTable').querySelector('tbody');
-  tb.innerHTML = '';
-  for (const t of data.trades || []) {
-    let ench = '';
-    try {
-      const arr = JSON.parse(t.enchants_json || '[]');
-      ench = arr
-        .map((e) => `${String(e.name || '').replace('minecraft:', '')} ${e.lvl ?? ''}`)
-        .join(', ');
-    } catch {
-      ench = '';
-    }
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${fmtDate(t.ts)}</td>
-      <td class="mono" title="${escapeHtml(t.key_code)}">${shortKey(t.key_code)}</td>
-      <td>${t.side}</td>
-      <td>${escapeHtml(t.label)}</td>
-      <td class="mono muted">${escapeHtml(t.item_type) || '—'}</td>
-      <td>${fmtMoney(t.price)}</td>
-      <td>${t.integrity == null ? '—' : `${Math.round(Number(t.integrity) * 100)}%`}</td>
-      <td>${t.anarchy ?? '—'}</td>
-      <td class="muted">${escapeHtml(ench) || '—'}</td>`;
-    tb.appendChild(tr);
-  }
-}
-
-async function refreshLaunches() {
-  const keyId = selectedKeyId();
-  const q = keyId ? `?keyId=${keyId}` : '';
-  const data = await api(`/v1/admin/launches${q}`);
-  const tb = $('launchesTable').querySelector('tbody');
-  tb.innerHTML = '';
-  for (const l of data.launches || []) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${fmtDate(l.at)}</td>
-      <td class="mono" title="${escapeHtml(l.key_code)}">${shortKey(l.key_code)}</td>
-      <td class="${l.ok ? 'ok' : 'bad'}">${l.ok ? 'ok' : 'fail'}</td>
-      <td class="mono muted">${l.device_id ? String(l.device_id).slice(0, 12) : '—'}</td>
-      <td class="muted">${escapeHtml(l.reason) || '—'}</td>`;
-    tb.appendChild(tr);
-  }
-}
-
 async function refreshAll() {
   try {
-    await Promise.all([refreshPurchases(), refreshItems(), refreshTrades(), refreshLaunches()]);
+    await Promise.all([refreshPurchases(), refreshItems()]);
   } catch (e) {
     console.warn(e);
     flash(`api: ${e.message}`, true);
@@ -315,9 +244,6 @@ async function refreshAll() {
 $('refreshAll')?.addEventListener('click', refreshAll);
 $('periodDays')?.addEventListener('change', () => {
   void Promise.all([refreshItems()]);
-});
-$('profitKey')?.addEventListener('change', () => {
-  void Promise.all([refreshTrades(), refreshLaunches()]);
 });
 
 async function tryUnlock(key) {
