@@ -5,14 +5,27 @@
 ## Запуск
 
 ```bash
-cd botpodpopcorn-license
-node src/server.mjs
+cd ~/license
+npm install   # один раз
+chmod +x scripts/run/license.sh scripts/run/stop.sh
+
+# с автоперезапуском (как у ботов / sell)
+nohup bash scripts/run/license.sh > server.log 2>&1 &
+
+# остановить
+bash scripts/run/stop.sh
 ```
 
 По умолчанию: `http://0.0.0.0:8787`  
 Админка: открыть в браузере тот же URL.
 
-При первом старте создаётся **admin**-ключ (печатается в консоль).
+При первом старте создаётся **admin**-ключ (печатается в `server.log`).
+
+Проверка:
+```bash
+curl -sS http://127.0.0.1:8787/ | head
+tail -f server.log
+```
 
 ### Env
 
