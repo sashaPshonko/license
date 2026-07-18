@@ -56,6 +56,16 @@ body {
   font-size: 13px;
 }
 .gate-error.hidden { display: none; }
+.gate-hint {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.gate-hint code {
+  font-family: var(--mono);
+  font-size: 11px;
+}
 header {
   display: flex;
   justify-content: space-between;

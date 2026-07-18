@@ -31,20 +31,24 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 const db = openDb();
 
-// Первый запуск: admin-ключ для тестов, если ещё нет ни одного
-const existing = db.prepare(`SELECT COUNT(*) AS n FROM license_keys`).get().n;
-if (existing === 0) {
-    const admin = createKey(db, { plan: 'admin', note: 'bootstrap admin' });
-    console.log(`[license] bootstrap admin key: ${admin.key_code}`);
-} else {
-    const hasAdmin = db
-        .prepare(`SELECT COUNT(*) AS n FROM license_keys WHERE plan = 'admin' AND revoked = 0`)
-        .get().n;
-    if (!hasAdmin) {
-        const admin = createKey(db, { plan: 'admin', note: 'bootstrap admin' });
-        console.log(`[license] created missing admin key: ${admin.key_code}`);
+function ensureAdminKeyLogged() {
+    let admin = db
+        .prepare(
+            `SELECT key_code FROM license_keys
+             WHERE plan = 'admin' AND revoked = 0
+             ORDER BY id ASC LIMIT 1`,
+        )
+        .get();
+    if (!admin) {
+        admin = createKey(db, { plan: 'admin', note: 'bootstrap admin' });
+        console.log(`[license] created admin key: ${admin.key_code}`);
+    } else {
+        console.log(`[license] admin key: ${admin.key_code}`);
     }
+    return admin.key_code;
 }
+
+ensureAdminKeyLogged();
 
 const MIME = {
     '.html': 'text/html; charset=utf-8',
@@ -164,11 +168,22 @@ async function handleApi(req, res, url) {
         if (path === '/v1/admin/login' && req.method === 'POST') {
             const body = await readBody(req);
             const keyCode = String(body.key || body.token || '').trim();
-            if (!isAdminAuth(db, keyCode, ADMIN_TOKEN)) {
-                sendJson(res, 401, { ok: false, reason: 'unauthorized' });
+            if (!keyCode) {
+                sendJson(res, 400, { ok: false, reason: 'no_key' });
                 return;
             }
             const key = getKeyByCode(db, keyCode);
+            if (!isAdminAuth(db, keyCode, ADMIN_TOKEN)) {
+                sendJson(res, 401, {
+                    ok: false,
+                    reason: 'unauthorized',
+                    hint:
+                        key && key.plan !== 'admin'
+                            ? `это ключ plan=${key.plan}, нужен plan=admin`
+                            : 'ключ не найден или не admin',
+                });
+                return;
+            }
             sendJson(res, 200, {
                 ok: true,
                 plan: key?.plan || 'admin',

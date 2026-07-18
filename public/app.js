@@ -344,7 +344,9 @@ async function tryUnlock(key) {
     if (!res.ok || !data.ok) {
       if (err) {
         err.classList.remove('hidden');
-        err.textContent = 'Неверный ключ (нужен plan=admin)';
+        err.textContent =
+          data.hint ||
+          'Не подошёл. Нужен ключ plan=admin (не normal/pro). На VPS: node scripts/ensure-admin.mjs';
       }
       return false;
     }

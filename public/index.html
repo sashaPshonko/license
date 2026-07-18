@@ -11,12 +11,13 @@
   <div id="gate" class="gate">
     <div class="gate-card">
       <h1>botpodpopcorn</h1>
-      <p class="sub">вход в админку — только admin-ключ</p>
+      <p class="sub">вход только по ключу с планом <strong>admin</strong></p>
       <label>Admin key
         <input id="gateKey" type="password" autocomplete="off" spellcheck="false" placeholder="POP-…" />
       </label>
       <button type="button" id="gateUnlock" class="primary-btn">Войти</button>
       <p id="gateError" class="gate-error hidden"></p>
+      <p class="gate-hint">Ключ смотри на сервере: <code>node scripts/ensure-admin.mjs</code> или в <code>server.log</code></p>
     </div>
   </div>
 
